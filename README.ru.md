@@ -106,7 +106,7 @@
 
 ## Что нужно
 
-Claude Code, Python 3.9+, git, macOS, Linux или Windows (автопилот — только macOS, Linux или WSL). Движки,
+Claude Code, Python 3.9+, git, macOS, Linux или Windows. Движки,
 Blender, ffmpeg и остальное скилл поставит сам, когда они понадобятся вашей игре.
 
 ## Лицензия

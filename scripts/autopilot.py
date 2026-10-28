@@ -22,16 +22,12 @@ The last line of `tick` is for the host session: `NEXT: now` (next tick right aw
 `NEXT: wait` (wait for the schedule), `NEXT: stop` (delete the CronCreate job).
 It stops by itself: the agent created .studioigor/autopilot/STOP, the goal is closed, time ran out,
 ticks ran out, 3 ticks in a row with an error or without changes to the game.
-stdlib only, macOS/Linux (Windows — via WSL). Does not push or publish: the prohibitions are
+stdlib only, macOS, Linux and Windows (platform helpers in ostools.py). Does not push or publish: the prohibitions are
 in --disallowedTools.
 """
 from __future__ import annotations
 
 import argparse
-try:
-    import fcntl
-except ImportError:  # Windows: autopilot needs macOS, Linux or WSL (checked in main)
-    fcntl = None
 import hashlib
 import json
 import os
@@ -54,6 +50,8 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 sys.path.insert(0, str(HERE))
+import ostools  # noqa: E402
+import schedule_win  # noqa: E402
 import studio  # noqa: E402
 
 ST = studio.ST
@@ -157,19 +155,11 @@ def find_root(arg: str) -> Path:
 # ------------------------------------------------------------------ processes and lock
 
 def alive(pid) -> bool:
-    if not pid:
-        return False
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, ValueError):
-        return False
+    return ostools.process_alive(pid)
 
 
 def proc_cmd(pid) -> str:
-    if not alive(pid):
-        return ""
-    return subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return ostools.process_cmdline(pid)
 
 
 def is_tick_agent(pid) -> bool:
@@ -178,23 +168,14 @@ def is_tick_agent(pid) -> bool:
     return "--disallowedTools" in c and "--permission-mode" in c
 
 
-def kill_group(pid, sig=signal.SIGTERM) -> None:
-    try:
-        os.killpg(int(pid), sig)
-    except (OSError, TypeError, ValueError):
-        pass
+def kill_group(pid, force: bool = False) -> None:
+    ostools.kill_tree(pid, force=force)
 
 
 def try_lock(root: Path):
     d = ap_dir(root)
     d.mkdir(parents=True, exist_ok=True)
-    fh = open(d / "lock", "a+")
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return fh
-    except OSError:
-        fh.close()
-        return None
+    return ostools.try_lock(d / "lock")
 
 
 def read_lock(root: Path) -> dict:
@@ -273,6 +254,8 @@ def install(root: Path, st: dict) -> str:
         subprocess.run(["launchctl", "bootout", f"{dom}/{lbl}"], capture_output=True)
         p = subprocess.run(["launchctl", "bootstrap", dom, str(pp)], capture_output=True, text=True)
         return "" if p.returncode == 0 else f"launchctl bootstrap failed: {p.stderr.strip() or p.stdout.strip()}"
+    if kind == "schtasks":
+        return schedule_win.win_install(lbl, tick_argv(root), st["every"], ap_dir(root))
     if kind == "cron":
         envs = " ".join(f"{k}={shlex.quote(v)}" for k, v in st["env"].items())
         line = (f"{cron_expr(st['every'])} cd {shlex.quote(str(root))} && env {envs} "
@@ -290,6 +273,8 @@ def uninstall(st: dict) -> None:
     if kind == "launchd" and lbl:
         plist_path(lbl).unlink(missing_ok=True)
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{lbl}"], capture_output=True)
+    elif kind == "schtasks" and lbl:
+        schedule_win.win_uninstall(lbl)
     elif kind == "cron" and lbl:
         cur = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
         if lbl in cur:
@@ -301,6 +286,8 @@ def installed(st: dict) -> bool:
     kind, lbl = st.get("scheduler"), st.get("label", "")
     if kind == "launchd":
         return subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{lbl}"], capture_output=True).returncode == 0
+    if kind == "schtasks":
+        return schedule_win.win_installed(lbl)
     if kind == "cron":
         return lbl in subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
     return True  # session: the CronCreate job lives in the session and can't be checked from outside
@@ -442,11 +429,8 @@ def finish(root: Path, st: dict, reason: str) -> None:
     log(root, f"| — | {datetime.now():%d.%m %H:%M} | | {phase_now(root)} | | | | STOP | {cell(reason)} |")
     auto_report(root, st, reason)
     cf = st.get("caffeinate_pid")
-    if cf and "caffeinate" in proc_cmd(cf):
-        try:
-            os.kill(int(cf), signal.SIGTERM)
-        except OSError:
-            pass
+    if cf and any(w in proc_cmd(cf) for w in ("caffeinate", "ostools.py")):
+        kill_group(cf)
     notify("studioigor — autopilot stopped", f"{root.name}: {reason}"[:200])
     print(f"autopilot stopped: {reason}")
     print(f"  report: {AP}/REPORT.md")
@@ -479,7 +463,7 @@ def cmd_start(a) -> int:
         return 1
     sched = a.scheduler
     if sched == "system":
-        sched = "launchd" if sys.platform == "darwin" else "cron" if shutil.which("crontab") else "none"
+        sched = "launchd" if sys.platform == "darwin" else "schtasks" if ostools.IS_WIN else "cron" if shutil.which("crontab") else "none"
     if sched == "session" and (not a.hours or a.hours > 167):
         print("CronCreate lives at most 7 days — time limit set to 167 h")
         a.hours = 167
@@ -546,10 +530,11 @@ def cmd_start(a) -> int:
     if err:
         print(err)
         return 1
-    if sys.platform == "darwin" and not a.no_caffeinate and shutil.which("caffeinate"):
+    if not a.no_caffeinate:
         secs = int(a.hours * 3600) if a.hours else 7 * 24 * 3600
-        st["caffeinate_pid"] = subprocess.Popen(["caffeinate", "-i", "-s", "-t", str(secs)], start_new_session=True,
-                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid
+        keeper = ostools.keep_awake(seconds=secs)
+        if keeper:
+            st["caffeinate_pid"] = keeper
     save(root, st)
     log(root, f"| — | {now:%d.%m %H:%M} | | {phase_now(root)} | | | | START | goal {a.goal}, "
               f"{a.hours or '∞'} h, every {every} min, {sched}, {a.mode} |")
@@ -629,7 +614,7 @@ def run_tick(root: Path, st: dict, fh) -> int:
             print(f"tick {prev.get('tick')} is still running ({age:.0f} min, no runner)")
             print("NEXT: wait")
             return 0
-        kill_group(prev["claude_pid"], signal.SIGKILL)
+        kill_group(prev["claude_pid"], force=True)
 
     n = st["ticks"] + 1
     started = datetime.now()
@@ -642,8 +627,7 @@ def run_tick(root: Path, st: dict, fh) -> int:
     outcome, rc, res, err_text = "ok", 0, {}, ""
     try:
         with out_p.open("w") as fo, err_p.open("w") as fe:
-            proc = subprocess.Popen(claude_cmd(st, prompt), cwd=root, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL,
-                                    env=run_env(st), start_new_session=True)
+            proc = ostools.spawn_detached(claude_cmd(st, prompt), cwd=root, env=run_env(st), stdout=fo, stderr=fe)
             (ap_dir(root) / "lock.json").write_text(json.dumps({
                 "runner_pid": os.getpid(), "claude_pid": proc.pid, "tick": n, "started": ts(started)}),
                 encoding="utf-8")
@@ -651,17 +635,16 @@ def run_tick(root: Path, st: dict, fh) -> int:
             def on_term(sig, frame):  # the session was closed or stop --now — don't leave the agent orphaned
                 kill_group(proc.pid)
                 raise SystemExit(1)
-            signal.signal(signal.SIGTERM, on_term)
-            signal.signal(signal.SIGHUP, on_term)
-            if sys.platform == "darwin" and shutil.which("caffeinate"):
-                subprocess.Popen(["caffeinate", "-i", "-s", "-w", str(proc.pid)],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for name in ("SIGTERM", "SIGHUP"):  # SIGHUP does not exist on Windows
+                if hasattr(signal, name):
+                    signal.signal(getattr(signal, name), on_term)
+            ostools.keep_awake(watch_pid=proc.pid)  # ends by itself when the agent exits
             try:
                 rc = proc.wait(timeout=st["tick_minutes"] * 60)
             except subprocess.TimeoutExpired:
                 outcome, rc = "timeout", -1
-                for sig in (signal.SIGTERM, signal.SIGKILL):
-                    kill_group(proc.pid, sig)
+                for force in (False, True):
+                    kill_group(proc.pid, force=force)
                     try:
                         proc.wait(timeout=20)
                         break
@@ -800,10 +783,13 @@ def cmd_stop(a) -> int:
             kill_group(lk["claude_pid"])
         rp = lk.get("runner_pid")
         if rp and "autopilot.py" in proc_cmd(rp):
-            try:
-                os.kill(int(rp), signal.SIGTERM)
-            except OSError:
-                pass
+            if ostools.IS_WIN:
+                ostools.kill_tree(rp)
+            else:
+                try:
+                    os.kill(int(rp), signal.SIGTERM)
+                except OSError:
+                    pass
     finish(root, st, reason)
     return 0
 
@@ -823,9 +809,6 @@ def cmd_prompt(a) -> int:
 
 
 def main() -> int:
-    if os.name == "nt" or fcntl is None:
-        print("autopilot runs on macOS, Linux or WSL: it uses launchd/caffeinate and process groups", file=sys.stderr)
-        return 2
     sys.stdout.reconfigure(line_buffering=True)
     ap = argparse.ArgumentParser(description="studioigor autopilot — independent development on a schedule")
     common = argparse.ArgumentParser(add_help=False)
@@ -858,9 +841,6 @@ def main() -> int:
     p.add_argument("--cron", action="store_true")
 
     a = ap.parse_args()
-    if os.name == "nt":
-        print("the autopilot runs on macOS and Linux; on Windows — via WSL")
-        return 1
     return {"start": cmd_start, "tick": cmd_tick, "status": cmd_status, "stop": cmd_stop,
             "prompt": cmd_prompt}[a.cmd](a)
 

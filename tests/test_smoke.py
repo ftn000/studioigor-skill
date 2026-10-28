@@ -45,14 +45,9 @@ class ImportTests(unittest.TestCase):
         with tempfile.TemporaryFile("w+") as fh:
             refs._lock(fh)  # must not raise on Windows (msvcrt) or POSIX (fcntl)
 
-    def test_autopilot_platform_guard(self):
-        # autopilot is macOS/Linux/WSL only; on native Windows it must exit with a clear message
+    def test_autopilot_help_runs_on_this_platform(self):
         r = run_script("autopilot.py", "--help")
-        if os.name == "nt":
-            self.assertEqual(r.returncode, 2)
-            self.assertIn("macOS, Linux or WSL", r.stderr)
-        else:
-            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
 
 class CliTests(unittest.TestCase):
