@@ -46,8 +46,10 @@ While the user is around, this takes up to 5 minutes:
 5. Launch:
    ```bash
    python3 <skill>/scripts/autopilot.py start \
-     --goal slice|game|build --hours 10 --brief "<the user's message verbatim>"
+     --goal audit --hours 10 --brief "<the user's message verbatim>"
    ```
+   Goals: `idea`, `style`, `stack`, `assets`, `mechanics`, `slice`, `content`, `polish`, `build` each run until that
+   phase closes. `audit` is for an existing game: it writes `AUDIT.md` and fixes only clear, low-risk bugs.
    The script checks that `claude -p` works in the `auto` permission mode, and prints
    the schedule and the prompt for CronCreate. On macOS, `caffeinate` keeps the Mac from idle
    sleep. The `--mode bypass` mode (no permission checks) — only with the user's explicit

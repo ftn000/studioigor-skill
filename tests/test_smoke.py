@@ -90,5 +90,43 @@ class StateTests(unittest.TestCase):
                 self.assertTrue((st / f).exists(), f)
 
 
+class AutopilotGoalTests(unittest.TestCase):
+    """Goals cover every stage, audit closes by its report, untracked user files stay out of commits."""
+
+    def test_goals_cover_every_stage_and_audit(self):
+        import autopilot
+        for g in ["audit", "idea", "style", "stack", "assets", "mechanics", "slice", "content", "polish", "build"]:
+            with self.subTest(goal=g):
+                self.assertIn(g, autopilot.GOALS)
+
+    def test_audit_is_closed_by_its_report(self):
+        import autopilot
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".studioigor" / "autopilot").mkdir(parents=True)
+            self.assertFalse(autopilot.goal_closed(root, "audit"))
+            (root / ".studioigor" / "autopilot" / "AUDIT.md").write_text("# audit\n", encoding="utf-8")
+            self.assertTrue(autopilot.goal_closed(root, "audit"))
+
+    def test_user_untracked_files_are_excluded_from_add_all(self):
+        import autopilot
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "user_notes").mkdir()
+            (root / "user_notes" / "a.txt").write_text("mine", encoding="utf-8")
+            (root / "game.txt").write_text("code", encoding="utf-8")
+            (root / ".studioigor").mkdir()
+            (root / ".studioigor" / "STATE.md").write_text("state", encoding="utf-8")
+            hidden = autopilot.hide_user_untracked(root)
+            self.assertIn("user_notes", hidden)
+            self.assertNotIn(".studioigor", hidden)
+            subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+            staged = subprocess.run(["git", "-C", str(root), "diff", "--cached", "--name-only"],
+                                    capture_output=True, text=True).stdout.split()
+            self.assertNotIn("user_notes/a.txt", staged)
+            self.assertIn(".studioigor/STATE.md", staged)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -57,9 +57,23 @@ import studio  # noqa: E402
 ST = studio.ST
 AP = f"{ST}/autopilot"
 GOALS = {
-    "slice": (7, "bring the game to a playable vertical slice (done when the gates of phases 1–7 are closed)"),
+    "audit": (0, "audit the existing game: read the code, tests and docs, and write .studioigor/autopilot/AUDIT.md "
+                 "with findings ranked by severity (file:line). No feature work; fix only clear, low-risk bugs with "
+                 "tests. Done when AUDIT.md is written"),
+    "idea": (1, "pitch and concept: CONCEPT, pillars, STORY, mechanics list in DESIGN (done when phase 1 is closed)"),
+    "style": (2, "visual style: art bible in ART_BIBLE, references and the look of one key scene "
+                 "(done when phase 2 is closed)"),
+    "stack": (4, "platform and engine chosen (TECH), environment installed and verified (ENV) "
+                 "(done when phase 4 is closed)"),
+    "assets": (5, "assets by category, strategy and license registry (ASSETS), look-dev scene "
+                  "(done when phase 5 is closed)"),
+    "mechanics": (6, "every core mechanic built in its gym, specified in DESIGN and locked "
+                     "(done when phase 6 is closed)"),
+    "slice": (7, "a playable vertical slice: menu, game, result, with sound and story (done when phases 1–7 are closed)"),
+    "content": (8, "full game content per SCOPE.md, levels as data, story beats (done when phases 1–8 are closed)"),
+    "polish": (9, "polish: juice, sound, the first 60 seconds, performance (done when phases 1–9 are closed)"),
     "game": (9, "bring it to a full game with content per SCOPE.md and polish (done when phases 1–9 are closed)"),
-    "build": (10, "bring it to a full game and a release build for the chosen platform, without publishing "
+    "build": (10, "a full game and a release build for the chosen platform, without publishing "
                   "(done when phases 1–10 are closed)"),
 }
 MODES = {"auto": "auto", "bypass": "bypassPermissions"}
@@ -139,6 +153,8 @@ def head(root: Path) -> str:
 
 
 def goal_closed(root: Path, goal: str) -> bool:
+    if goal == "audit":
+        return (ap_dir(root) / "AUDIT.md").is_file()
     cp = studio.current_phase(root, studio.parse_pipeline(studio.read(root / ST / "PIPELINE.md")))
     return cp is None or cp["num"] > GOALS[goal][0]
 
@@ -378,6 +394,9 @@ def build_prompt(root: Path, st: dict) -> str:
                      "another path to the same gates, or --block with a reason and work on what isn't blocked. "
                      "On the 3rd the autopilot stops.")
     last = n >= st["max_ticks"] or (left_h is not None and left_h * 60 < st["tick_minutes"] + 10)
+    if st["goal"] == "audit":
+        lines.append(f"Audit mode: write {AP}/AUDIT.md (findings by severity with file:line, what is fine, what to do "
+                     "next). It closes the goal. No feature work.")
     if goal_closed(root, st["goal"]):
         lines.append("All of the goal's gates are closed: do the finish per autopilot.md §8 and create STOP.")
     elif last:
@@ -424,6 +443,7 @@ def auto_report(root: Path, st: dict, reason: str) -> None:
 
 
 def finish(root: Path, st: dict, reason: str) -> None:
+    reason = reason.lstrip("﻿")
     st.update(active=False, stopped_at=ts(), reason=reason)
     save(root, st)
     log(root, f"| — | {datetime.now():%d.%m %H:%M} | | {phase_now(root)} | | | | STOP | {cell(reason)} |")
@@ -438,6 +458,34 @@ def finish(root: Path, st: dict, reason: str) -> None:
         print("  delete the CronCreate job in the session: CronList → CronDelete")
     print("NEXT: stop", flush=True)
     uninstall(st)  # last: launchd may take this process down too
+
+
+KEEP_TRACKED_BY_AUTOPILOT = {".studioigor", "CLAUDE.md", ".gitignore"}
+
+
+def hide_user_untracked(root: Path) -> list[str]:
+    """Untracked top-level entries that were there before the run are excluded locally
+    (.git/info/exclude is not committed), so `git add -A` in ticks never sweeps them in."""
+    if not studio.in_repo(root):
+        return []
+    out = studio.git(root, "status", "--porcelain", "--untracked-files=normal").stdout.splitlines()
+    names = set()
+    for line in out:
+        if not line.startswith("?? "):
+            continue
+        top = line[3:].strip().strip('"').split("/")[0]
+        if top and top not in KEEP_TRACKED_BY_AUTOPILOT:
+            names.add(top)
+    exc = Path(studio.git(root, "rev-parse", "--git-path", "info/exclude").stdout.strip())
+    exc = exc if exc.is_absolute() else root / exc
+    exc.parent.mkdir(parents=True, exist_ok=True)
+    text = exc.read_text(encoding="utf-8") if exc.is_file() else ""
+    need = sorted(f"/{n}" for n in names if f"/{n}" not in text.split("\n"))
+    if need:
+        block = "\n".join(need) + "\n"
+        head = text.rstrip("\n") + ("\n" if text else "")
+        exc.write_text(head + "# studioigor autopilot: user's untracked files" + "\n" + block, encoding="utf-8")
+    return sorted(names)
 
 
 def ensure_ignored(root: Path) -> None:
@@ -521,6 +569,7 @@ def cmd_start(a) -> int:
                       "| phase | decided | alternative | why | commit |\n|---|---|---|---|---|\n",
                       encoding="utf-8")
     ensure_ignored(root)
+    hide_user_untracked(root)
     if studio.in_repo(root):
         paths = [".gitignore", f"{AP}/REVIEW.md"]
         studio.git(root, "add", "--", *paths)
@@ -594,7 +643,7 @@ def run_tick(root: Path, st: dict, fh) -> int:
     stop = ap_dir(root) / "STOP"
     dl = parse_ts(st.get("deadline"))
     if stop.is_file():
-        finish(root, st, stop.read_text(encoding="utf-8").strip() or "STOP")
+        finish(root, st, stop.read_text(encoding="utf-8-sig").strip() or "STOP")
         return 0
     if dl and datetime.now() >= dl:
         finish(root, st, "time ran out")
@@ -704,7 +753,7 @@ def run_tick(root: Path, st: dict, fh) -> int:
     if not st.get("active"):
         print("NEXT: stop")
     elif stop.is_file():
-        finish(root, st, stop.read_text(encoding="utf-8").strip() or "STOP")
+        finish(root, st, stop.read_text(encoding="utf-8-sig").strip() or "STOP")
     elif closed_before and goal_closed(root, st["goal"]):
         finish(root, st, "goal closed: all gates of the goal's phases")
     elif st["fails"] >= 3:
