@@ -22,6 +22,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1251/cp437; scripts print UTF-8 text (em dashes, arrows).
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".heic"}
 
 

@@ -31,6 +31,11 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
+# Windows consoles default to cp1251/cp437; scripts print UTF-8 text (em dashes, arrows).
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 sys.dont_write_bytecode = True
 SKILL = Path(__file__).resolve().parent.parent
 TEMPLATES = SKILL / "scripts" / "templates"
@@ -489,7 +494,7 @@ def cmd_init(a) -> int:
     for n in notes:
         print(f"  {n}")
     register(a.name, root)
-    print(f"\nNext: cd {root} && python3 {Path(__file__).resolve()} status")
+    print(f"\nNext: cd {root} && {sys.executable} {Path(__file__).resolve()} status")
     print("  (all studio.py commands find the project from the current folder; next time start claude from here)")
     if fresh_repo:
         print("Then the first commit: studio.py commit \"studioigor: project start\"")

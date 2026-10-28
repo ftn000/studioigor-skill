@@ -17,6 +17,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Windows consoles default to cp1251/cp437; scripts print UTF-8 text (em dashes, arrows).
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 WINNER = re.compile(r"^[ \t]*(?:\*\*)?WINNER(?:\*\*)?:[ \t]*(A|B|TIE)\b", re.I | re.M)
 GAP = re.compile(r"^[ \t]*(?:\*\*)?GAP(?:\*\*)?:[ \t]*(\S.*?)[ \t]*$", re.I | re.M)
 LENS = re.compile(r"lens:[ \t]*([^\n|—]+)", re.I)

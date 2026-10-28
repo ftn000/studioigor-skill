@@ -38,7 +38,20 @@ from __future__ import annotations
 
 import argparse
 import colorsys
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows: no fcntl, use msvcrt byte-range locking
+    fcntl = None
+    import msvcrt
+
+
+def _lock(fh) -> None:
+    """Exclusive lock on an open file; blocks until it is free. Works on macOS, Linux and Windows."""
+    if fcntl:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+    else:
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)  # retries ~10 s, then raises
 import hashlib
 import html
 import json
@@ -56,6 +69,11 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+# Windows consoles default to cp1251/cp437; scripts print UTF-8 text (em dashes, arrows).
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
 
 UA = os.environ.get("STUDIOIGOR_UA") or \
     "studioigor-refs/1.0 (personal game-dev moodboard; low volume; python-urllib)"
@@ -88,7 +106,7 @@ def throttle(name: str, limit: int, window: float) -> None:
     """Machine-wide request counter (parallel subagents are counted too)."""
     state = Path(tempfile.gettempdir()) / f"studioigor-throttle-{name}.json"
     with open(_lock_path("throttle-" + name), "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+        _lock(lk)
         try:
             stamps = json.loads(state.read_text())
         except (OSError, ValueError):
@@ -293,7 +311,7 @@ class RefSet:
     def update(self, fn) -> None:
         """Re-read → modify → save under a lock (parallel runs into the same set)."""
         with open(_lock_path(str(self.path.resolve())), "w") as lk:
-            fcntl.flock(lk, fcntl.LOCK_EX)
+            _lock(lk)
             self.data = self._load()
             fn(self.data)
             self.save()

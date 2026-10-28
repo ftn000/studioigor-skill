@@ -28,7 +28,10 @@ in --disallowedTools.
 from __future__ import annotations
 
 import argparse
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows: autopilot needs macOS, Linux or WSL (checked in main)
+    fcntl = None
 import hashlib
 import json
 import os
@@ -41,6 +44,11 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Windows consoles default to cp1251/cp437; scripts print UTF-8 text (em dashes, arrows).
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -391,7 +399,7 @@ def build_prompt(root: Path, st: dict) -> str:
     lines += [
         "",
         f"1. Read {skill}/SKILL.md and {skill}/references/autopilot.md — the proxy rules take precedence in this mode.",
-        f"2. python3 {skill}/scripts/studio.py status — do what it says.",
+        f"2. {sys.executable} {skill}/scripts/studio.py status — do what it says.",
         f"3. One substantive step toward the goal, in about {max(20, st['tick_minutes'] - 20)} minutes: the current "
         "phase's gates or one mechanic's cycle. The game comes first.",
         "4. At the end: studio.py commit \"…\" and studio.py note \"what was done\" \"what's next\".",
@@ -815,6 +823,9 @@ def cmd_prompt(a) -> int:
 
 
 def main() -> int:
+    if os.name == "nt" or fcntl is None:
+        print("autopilot runs on macOS, Linux or WSL: it uses launchd/caffeinate and process groups", file=sys.stderr)
+        return 2
     sys.stdout.reconfigure(line_buffering=True)
     ap = argparse.ArgumentParser(description="studioigor autopilot — independent development on a schedule")
     common = argparse.ArgumentParser(add_help=False)

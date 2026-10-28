@@ -103,8 +103,10 @@ time runs out or it gets stuck. It never pushes, publishes, pays or logs in.
 
 ## Requirements
 
-Claude Code, Python 3.9+, git, macOS or Linux (Windows via WSL). Engines, Blender,
+Claude Code, Python 3.9+, git, macOS, Linux or Windows (autopilot needs macOS, Linux or WSL). Engines, Blender,
 ffmpeg and the rest are installed by the skill when your game needs them.
+
+On Windows, use `py` (or `python`) in place of `python3` in the commands in the docs.
 
 ## License
 

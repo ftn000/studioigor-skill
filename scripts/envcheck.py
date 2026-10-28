@@ -28,6 +28,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1251/cp437; scripts print UTF-8 text (em dashes, arrows).
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 ENGINES = ("godot", "godot-mono", "unity", "unreal", "web", "defold", "bevy")
 HOME = Path.home()
 GODOT_TPL = HOME / "Library/Application Support/Godot/export_templates"
@@ -48,6 +53,14 @@ def run(cmd: list[str], timeout: float = 15, cwd: Path | None = None, env: dict 
         return p.returncode, (p.stdout + p.stderr).strip()
     except (OSError, subprocess.SubprocessError):
         return 127, ""
+
+
+def port_listening(port: int) -> bool:
+    """Portable replacement for `lsof -iTCP:<port> -sTCP:LISTEN` (no lsof on Windows)."""
+    import socket
+    with socket.socket() as s:
+        s.settimeout(1)
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def which(*names: str) -> str | None:
@@ -224,7 +237,7 @@ def check_common(r: Report, engine: str | None, dim: str) -> None:
     lfs = run(["git", "lfs", "version"])[0] == 0 if git else False
     r.add(g, "git-lfs", lfs, REQ, ver(run(["git", "lfs", "version"])[1]) if lfs else "",
           "brew install git-lfs && git lfs install")
-    r.add(g, "python3", True, REQ, sys.version.split()[0])
+    r.add(g, "python 3", True, REQ, sys.version.split()[0])
     node = which("node")
     r.add(g, "node + npm", bool(node and which("npm")), REQ if engine == "web" else REC,
           ver(run(["node", "--version"])[1]) if node else "", "brew install node   (or nvm install --lts)")
@@ -364,10 +377,10 @@ def check_godot(r: Report, mono: bool, project: Path, platforms: list[str], want
     r.add(gq, "GUT or gdUnit4 in addons/", bool(tf) if has_proj else None, REQ, ", ".join(tf),
           "GUT of the same minor version as Godot: github.com/bitwes/Gut/releases → addons/gut",
           note="" if has_proj else "checked once project.godot exists")
-    rc, _ = run(["lsof", "-nP", "-iTCP:6005", "-sTCP:LISTEN"], 5)
-    r.add(gq, "GDScript LSP (editor, tcp 6005)", rc == 0, REC,
+    lsp_up = port_listening(6005)
+    r.add(gq, "GDScript LSP (editor, tcp 6005)", lsp_up, REC,
           hint="the LSP lives in the open Godot editor; without it, check with godot --headless --import",
-          note="the editor is not listening on 6005 right now" if rc != 0 else "")
+          note="" if lsp_up else "the editor is not listening on 6005 right now")
 
 
 def check_mobile(r: Report, platforms: list[str], jdk_major: str) -> None:
@@ -474,7 +487,8 @@ def check_unreal(r: Report, platforms: list[str], want_ver: str, servers: list[d
     launcher = Path("/Applications/Epic Games Launcher.app")
     r.add(g, "Epic Games Launcher", launcher.exists(), REQ, app_version(launcher),
           "brew install --cask epic-games", human=True, note="HUMAN: sign in to the Epic account")
-    ues = sorted(glob.glob("/Users/Shared/Epic Games/UE_*") + glob.glob(str(HOME / "Epic Games/UE_*")))
+    ues = sorted(glob.glob("/Users/Shared/Epic Games/UE_*") + glob.glob(str(HOME / "Epic Games/UE_*"))
+                 + glob.glob("C:/Program Files/Epic Games/UE_*"))
     r.add(g, "Unreal Engine 5", bool(ues), REQ, ", ".join(Path(u).name for u in ues),
           "Epic Games Launcher → Unreal Engine → Library → + → version → Install", human=True,
           note="HUMAN: install only via the launcher GUI, 40–100+ GB")

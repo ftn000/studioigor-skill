@@ -30,12 +30,17 @@ import html
 import json
 import os
 import socket
-import subprocess
 import sys
 import threading
+import webbrowser
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+# Windows consoles default to cp1251/cp437; scripts print UTF-8 text (em dashes, arrows).
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
 
 MEDIA_VIDEO = {".mp4", ".webm", ".mov", ".m4v"}
 
@@ -246,7 +251,7 @@ def serve(args) -> int:
     print("waiting for feedback (the \"Send\" button on the page)…" if args.until_feedback
           else "server is running; Ctrl+C — stop", flush=True)
     if args.open:
-        subprocess.run(["open", url], check=False)
+        webbrowser.open(url)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     try:
